@@ -15,6 +15,6 @@ def mse(object arr1 not None, object arr2 not None):
         total += diff**2
 
 
-    cdef double result = total / arr1_mem.size
+    cdef double result = <double>total / arr1_mem.size
     return result
 
