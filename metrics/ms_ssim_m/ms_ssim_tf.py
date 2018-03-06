@@ -23,8 +23,25 @@ from scipy import signal
 from scipy.ndimage.filters import convolve
 import tensorflow as tf
 import tensorflow.contrib.eager as tfe
+from keras import backend as K
+#tfe.enable_eager_execution()
 
-tfe.enable_eager_execution()
+
+def broadcast_to(tensor, shape):
+    return tensor + tf.zeros(dtype=tensor.dtype, shape=shape)
+
+
+def pad(im):
+    return tf.pad(im, np.array([[0, 0], [0, 1], [0, 1], [0, 0]]))
+
+
+def conv(img, window, size):
+    custom_window = tf.reshape(window, (size, size, 1, 1))
+    custom_window = broadcast_to(custom_window, (size, size, 3, 1))
+    return tf.nn.depthwise_conv2d(tf.cast(img, tf.float32),
+                                  custom_window,
+                                  strides=[1, 1, 1, 1],
+                                  padding='VALID')
 
 
 def _f_special_gauss(size, sigma):
@@ -38,7 +55,8 @@ def _f_special_gauss(size, sigma):
     x, y = np.mgrid[offset + start:stop, offset + start:stop]
     assert len(x) == size
     g = np.exp(-((x ** 2 + y ** 2) / (2.0 * sigma ** 2)))
-    return g / g.sum()
+    g /= g.sum()
+    return tf.constant(g, dtype=tf.float32)
 
 
 def _ssim_for_multiscale(img1, img2, max_val=255, filter_size=11,
@@ -65,30 +83,23 @@ def _ssim_for_multiscale(img1, img2, max_val=255, filter_size=11,
       RuntimeError: If input images don't have the same shape or don't have four
         dimensions: [batch_size, height, width, depth].
     """
-    if img1.shape != img2.shape:
-        raise RuntimeError('Input images must have the same shape (%s vs. %s).',
-                           img1.shape, img2.shape)
-    if img1.ndim != 4:
-        raise RuntimeError('Input images must have four dimensions, not %d',
-                           img1.ndim)
 
-    img1 = img1.astype(np.float64)
-    img2 = img2.astype(np.float64)
     _, height, width, _ = img1.shape
 
     # Filter size can't be larger than height or width of images.
-    size = min(filter_size, height, width)
+    #size = tf.min(filter_size, height, width)
+    size = filter_size
 
     # Scale down sigma if a smaller filter size is used.
     sigma = size * filter_sigma / filter_size if filter_size else 0
 
     if filter_size:
         window = tf.reshape(_f_special_gauss(size, sigma), (1, size, size, 1))
-        mu1 = signal.fftconvolve(img1, window, mode='valid')
-        mu2 = signal.fftconvolve(img2, window, mode='valid')
-        sigma11 = signal.fftconvolve(img1 * img1, window, mode='valid')
-        sigma22 = signal.fftconvolve(img2 * img2, window, mode='valid')
-        sigma12 = signal.fftconvolve(img1 * img2, window, mode='valid')
+        mu1 = conv(img1, window, size)
+        mu2 = conv(img2, window, size)
+        sigma11 = conv(img1 * img1, window, size)
+        sigma22 = conv(img2 * img2, window, size)
+        sigma12 = conv(img1 * img2, window, size)
     else:
         # Empty blur kernel so no need to convolve.
         mu1, mu2 = img1, img2
@@ -108,12 +119,12 @@ def _ssim_for_multiscale(img1, img2, max_val=255, filter_size=11,
     c2 = (k2 * max_val) ** 2
     v1 = 2.0 * sigma12 + c2
     v2 = sigma11 + sigma22 + c2
-    ssim = np.mean((((2.0 * mu12 + c1) * v1) / ((mu11 + mu22 + c1) * v2)))
-    cs = np.mean(v1 / v2)
+    ssim = tf.reduce_mean((((2.0 * mu12 + c1) * v1) / ((mu11 + mu22 + c1) * v2)))
+    cs = tf.reduce_mean(v1 / v2)
     return ssim, cs
 
 
-def ms_ssim(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
+def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
             k1=0.01, k2=0.03, weights=None):
     """Return the MS-SSIM score between `img1` and `img2`.
     This function implements Multi-Scale Structural Similarity (MS-SSIM) Image
@@ -142,29 +153,35 @@ def ms_ssim(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
         RuntimeError: If input images don't have the same shape or don't have four
             dimensions: [batch_size, height, width, depth].
     """
-    if img1.shape != img2.shape:
-        raise RuntimeError('Input images must have the same shape (%s vs. %s).',
-                           img1.shape, img2.shape)
-    if img1.ndim != 4:
-        raise RuntimeError('Input images must have four dimensions, not %d',
-                           img1.ndim)
 
     # Note: default weights don't sum to 1.0 but do match the paper / matlab code.
     weights = np.array(weights if weights else
                        [0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
     levels = weights.size
-    downsample_filter = np.ones((1, 2, 2, 1)) / 4.0
-    im1, im2 = [x.astype(np.float64) for x in [img1, img2]]
-    mssim = np.array([])
-    mcs = np.array([])
+    downsample_filter = np.ones((1, 2, 2, 1), dtype=np.float32) / 4.0
+    im1, im2 = [tf.cast(x, tf.float32) for x in [img1, img2]]
+    mssim = []
+    mcs = []
     for _ in range(levels):
         ssim, cs = _ssim_for_multiscale(
             im1, im2, max_val=max_val, filter_size=filter_size,
             filter_sigma=filter_sigma, k1=k1, k2=k2)
-        mssim = np.append(mssim, ssim)
-        mcs = np.append(mcs, cs)
-        filtered = [convolve(im, downsample_filter, mode='reflect')
+        mssim.append(ssim)
+        mcs.append(cs)
+        filtered = [conv(pad(im), downsample_filter, 2)
                     for im in [im1, im2]]
         im1, im2 = [x[:, ::2, ::2, :] for x in filtered]
-    return (np.prod(mcs[0:levels - 1] ** weights[0:levels - 1]) *
+    return (tf.reduce_prod(tf.convert_to_tensor(mcs[0:levels - 1]) ** weights[0:levels - 1]) *
             (mssim[levels - 1] ** weights[levels - 1]))
+
+
+class MS_SSIM_TF:
+
+    def __init__(self):
+        pl1 = K.placeholder((None, None, None, 3), dtype=tf.float32)
+        pl2 = K.placeholder((None, None, None, 3), dtype=tf.float32)
+        out = ms_ssim_tf(pl1, pl2)
+        self._func = K.function([pl1, pl2], [out])
+
+    def ms_ssim(self, img1, img2):
+        return self._func([img1, img2])[0]
