@@ -1,4 +1,4 @@
-# !/usr/bin/python
+#cython: infer_types=True, wraparound=False, boundscheck=False
 #
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
