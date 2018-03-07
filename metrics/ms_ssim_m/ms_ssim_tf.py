@@ -19,12 +19,8 @@
 Usage:
 """
 import numpy as np
-from scipy import signal
-from scipy.ndimage.filters import convolve
 import tensorflow as tf
-import tensorflow.contrib.eager as tfe
 from keras import backend as K
-#tfe.enable_eager_execution()
 
 
 def broadcast_to(tensor, shape):
@@ -32,14 +28,12 @@ def broadcast_to(tensor, shape):
 
 
 def pad(im):
-    return tf.pad(im, np.array([[0, 0], [0, 1], [0, 1], [0, 0]]))
+    return tf.pad(im, np.array([[0, 0], [0, 1], [0, 1], [0, 0]]), mode="REFLECT")
 
 
-def conv(img, window, size):
-    custom_window = tf.reshape(window, (size, size, 1, 1))
-    custom_window = broadcast_to(custom_window, (size, size, 3, 1))
+def conv(img, window):
     return tf.nn.depthwise_conv2d(tf.cast(img, tf.float32),
-                                  custom_window,
+                                  window,
                                   strides=[1, 1, 1, 1],
                                   padding='VALID')
 
@@ -94,12 +88,13 @@ def _ssim_for_multiscale(img1, img2, max_val=255, filter_size=11,
     sigma = size * filter_sigma / filter_size if filter_size else 0
 
     if filter_size:
-        window = tf.reshape(_f_special_gauss(size, sigma), (1, size, size, 1))
-        mu1 = conv(img1, window, size)
-        mu2 = conv(img2, window, size)
-        sigma11 = conv(img1 * img1, window, size)
-        sigma22 = conv(img2 * img2, window, size)
-        sigma12 = conv(img1 * img2, window, size)
+        window = broadcast_to(tf.reshape(_f_special_gauss(size, sigma),
+                                         (size, size, 1, 1)), (size, size, 3,1))
+        mu1 = conv(img1, window)
+        mu2 = conv(img2, window)
+        sigma11 = conv(img1 * img1, window)
+        sigma22 = conv(img2 * img2, window)
+        sigma12 = conv(img1 * img2, window)
     else:
         # Empty blur kernel so no need to convolve.
         mu1, mu2 = img1, img2
@@ -158,7 +153,7 @@ def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
     weights = np.array(weights if weights else
                        [0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
     levels = weights.size
-    downsample_filter = np.ones((1, 2, 2, 1), dtype=np.float32) / 4.0
+    downsample_filter = np.ones((2, 2, 3, 1), dtype=np.float32) / 4.0
     mssim = []
     mcs = []
     for _ in range(levels):
@@ -167,7 +162,7 @@ def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
             filter_sigma=filter_sigma, k1=k1, k2=k2)
         mssim.append(ssim)
         mcs.append(cs)
-        filtered = [conv(pad(im), downsample_filter, 2)
+        filtered = [conv(pad(im), downsample_filter)
                     for im in [img1, img2]]
         img1, img2 = [x[:, ::2, ::2, :] for x in filtered]
     return (tf.reduce_prod(tf.convert_to_tensor(mcs[0:levels - 1]) ** weights[0:levels - 1]) *
@@ -175,7 +170,6 @@ def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
 
 
 class MS_SSIM_TF:
-
     def __init__(self):
         pl1 = K.placeholder((None, None, None, 3), dtype=tf.float64)
         pl2 = K.placeholder((None, None, None, 3), dtype=tf.float64)
