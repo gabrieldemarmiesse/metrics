@@ -11,7 +11,10 @@ from metrics.ms_ssim_m.ms_ssim_tf import MS_SSIM_TF
 image = imageio.imread(os.path.join(__file__, '../..', 'corgi.jpg')).astype(np.int32)
 noisy = (image + np.random.uniform(-5, 5, image.shape)).astype(np.int32)
 obj = MS_SSIM_TF()
-time_func(ms_ssim, 'ms_ssim', image[None], noisy[None])
-time_func(ms_ssim_cy, 'ms_ssim_cy cython', image[None], noisy[None])
-time_func(obj.ms_ssim, 'ms_ssim_tf', image[None], noisy[None])
+image = np.broadcast_to(image, (4,) + image.shape)
+noisy = np.broadcast_to(noisy, (4,) + noisy.shape)
+
+time_func(ms_ssim, 'ms_ssim', image, noisy)
+time_func(ms_ssim_cy, 'ms_ssim_cy cython', image, noisy)
+time_func(obj.ms_ssim, 'ms_ssim_tf', image, noisy)
 

@@ -159,18 +159,17 @@ def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
                        [0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
     levels = weights.size
     downsample_filter = np.ones((1, 2, 2, 1), dtype=np.float32) / 4.0
-    im1, im2 = [tf.cast(x, tf.float32) for x in [img1, img2]]
     mssim = []
     mcs = []
     for _ in range(levels):
         ssim, cs = _ssim_for_multiscale(
-            im1, im2, max_val=max_val, filter_size=filter_size,
+            img1, img2, max_val=max_val, filter_size=filter_size,
             filter_sigma=filter_sigma, k1=k1, k2=k2)
         mssim.append(ssim)
         mcs.append(cs)
         filtered = [conv(pad(im), downsample_filter, 2)
-                    for im in [im1, im2]]
-        im1, im2 = [x[:, ::2, ::2, :] for x in filtered]
+                    for im in [img1, img2]]
+        img1, img2 = [x[:, ::2, ::2, :] for x in filtered]
     return (tf.reduce_prod(tf.convert_to_tensor(mcs[0:levels - 1]) ** weights[0:levels - 1]) *
             (mssim[levels - 1] ** weights[levels - 1]))
 
@@ -178,8 +177,8 @@ def ms_ssim_tf(img1, img2, max_val=255, filter_size=11, filter_sigma=1.5,
 class MS_SSIM_TF:
 
     def __init__(self):
-        pl1 = K.placeholder((None, None, None, 3), dtype=tf.float32)
-        pl2 = K.placeholder((None, None, None, 3), dtype=tf.float32)
+        pl1 = K.placeholder((None, None, None, 3), dtype=tf.float64)
+        pl2 = K.placeholder((None, None, None, 3), dtype=tf.float64)
         out = ms_ssim_tf(pl1, pl2)
         self._func = K.function([pl1, pl2], [out])
 

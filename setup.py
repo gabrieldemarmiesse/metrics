@@ -13,7 +13,7 @@ except ImportError:
     print("copy from www.cython.org and install it")
     sys.exit(1)
 
-if 1:
+if 0:
     cython_gen_files = [x for x in glob.glob('./**/*.c', recursive=True)
                         if x[-5:] == '_cy.c']
     so_files = list(glob.glob('./**/*.so', recursive=True))
